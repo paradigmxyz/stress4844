@@ -1,6 +1,7 @@
 use clap::Parser;
 use ethers::prelude::{signer::SignerMiddleware, *};
 use rand::{distributions::Standard, Rng};
+use tracing_subscriber::{filter::EnvFilter, prelude::*};
 
 #[derive(Debug, Parser)]
 struct Opts {
@@ -59,7 +60,11 @@ const TRIM_BYTES: usize = 500;
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let opts = Opts::parse();
-    tracing_subscriber::fmt::init();
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(EnvFilter::new("stress4844=trace"))
+        .init();
 
     let provider = Provider::try_from(opts.rpc_url)?;
     let signer = opts
@@ -99,7 +104,7 @@ async fn main() -> eyre::Result<()> {
         .sample_iter(Standard)
         .take(chunk)
         .collect::<Vec<u8>>();
-    tracing::debug!("blob size {}", blob.len());
+    let blob_len = blob.len();
 
     let tx = TransactionRequest::new()
         .to(receiver)
@@ -113,7 +118,7 @@ async fn main() -> eyre::Result<()> {
     let gas_used_per_block = block.gas_limit * opts.fill_pct / 100;
     let txs_per_block = (gas_used_per_block / gas_per_tx).as_u64();
     tracing::info!(
-        "submitting {txs_per_block} txs per block for {} blocks",
+        "submitting {txs_per_block} {blob_len} KB txs per block for {} blocks",
         opts.blocks
     );
     for i in 0..opts.blocks {
@@ -132,6 +137,8 @@ async fn main() -> eyre::Result<()> {
             );
         }
     }
+
+    tracing::debug!("Done! End Block: {}", provider.get_block_number().await?);
 
     Ok(())
 }
