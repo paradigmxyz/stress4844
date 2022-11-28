@@ -1,11 +1,19 @@
-use clap::Parser;
+// Eth libs
 use ethers::prelude::{signer::SignerMiddleware, *};
-use rand::{distributions::Standard, Rng};
+use ethers_flashbots::{BundleRequest, FlashbotsMiddleware};
+
+// CLI
+use clap::Parser;
 use tracing_subscriber::{filter::EnvFilter, prelude::*};
+
+// Misc
+use rand::{distributions::Standard, Rng};
+use std::sync::Arc;
+use url::Url;
 
 #[derive(Debug, Parser)]
 struct Opts {
-    #[arg(default_value = "1", short, long)]
+    #[arg(default_value = "1", long)]
     /// The number of blocks to run the stress test for
     blocks: usize,
 
@@ -23,7 +31,11 @@ struct Opts {
     /// The private key for the wallet you'll submit the stress test
     /// transactions with. MUST have enough ETH to cover for the gas.
     #[arg(long, short)]
-    private_key: String,
+    tx_signer: String,
+
+    /// The private key for the full-block template bundle signer wallet.
+    #[arg(long, short)]
+    bundle_signer: String,
 
     #[arg(default_value = "100", long, short)]
     gas_price: U256,
@@ -66,12 +78,24 @@ async fn main() -> eyre::Result<()> {
         .with(EnvFilter::new("stress4844=trace"))
         .init();
 
-    let provider = Provider::try_from(opts.rpc_url)?;
+    let provider = Arc::new(Provider::try_from(opts.rpc_url)?);
     let signer = opts
-        .private_key
+        .tx_signer
         .strip_prefix("0x")
-        .unwrap_or(&opts.private_key)
+        .unwrap_or(&opts.tx_signer)
         .parse::<LocalWallet>()?;
+
+    let bundle_signer = opts
+        .bundle_signer
+        .strip_prefix("0x")
+        .unwrap_or(&opts.bundle_signer)
+        .parse::<LocalWallet>()?;
+
+    let bundle_middleware = FlashbotsMiddleware::new(
+        provider.clone(),
+        Url::parse("https://relay.flashbots.net")?,
+        bundle_signer,
+    );
 
     let address = signer.address();
     let balance = provider.get_balance(address, None).await?;
@@ -90,7 +114,8 @@ async fn main() -> eyre::Result<()> {
         nonce
     );
     tracing::debug!("block gas limit: {} gas", block.gas_limit);
-    let provider = SignerMiddleware::new_with_provider_chain(provider, signer).await?;
+    let provider = SignerMiddleware::new_with_provider_chain(bundle_middleware, signer).await?;
+    let chain_id = provider.signer().chain_id();
 
     // TODO: Do we want this to be different per transaction?
     let receiver: Address = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse()?;
@@ -99,14 +124,19 @@ async fn main() -> eyre::Result<()> {
     // the other fields to be serialized.
     let chunk = opts.chunk_size * KB - TRIM_BYTES;
 
-    // Craft the transaction.
+    // Sample junk data for the blob.
     let blob = rand::thread_rng()
         .sample_iter(Standard)
-        .take(chunk)
+        // .take(chunks)
+        .take(10) // TODO: Remove.
         .collect::<Vec<u8>>();
     let blob_len = blob.len();
 
+    // Craft the transaction.
     let tx = TransactionRequest::new()
+        .chain_id(chain_id)
+        .value(0)
+        .from(address)
         .to(receiver)
         .data(blob)
         .gas_price(opts.gas_price);
@@ -116,27 +146,40 @@ async fn main() -> eyre::Result<()> {
 
     // For each block, we want `fill_pct` -> we generate N transactions to reach that.
     let gas_used_per_block = block.gas_limit * opts.fill_pct / 100;
-    let txs_per_block = (gas_used_per_block / gas_per_tx).as_u64();
+    let txs_per_block = 2; //  (gas_used_per_block / gas_per_tx).as_u64();
     tracing::info!(
         "submitting {txs_per_block} {blob_len} KB txs per block for {} blocks",
         opts.blocks
     );
-    for i in 0..opts.blocks {
-        for j in 0..txs_per_block {
-            let tx = tx.clone().nonce(nonce).gas_price(opts.gas_price * 110 / 10);
-            tracing::trace!("submitting nonce {}", tx.nonce.unwrap());
-            let pending_tx = provider.send_transaction(tx, None).await?;
-            nonce += U256::one();
-            tracing::debug!(
-                "[block: {}/{}, tx: {}/{}] submitted hash: {:?}",
-                i + 1,
-                opts.blocks,
-                j + 1,
-                txs_per_block,
-                *pending_tx
-            );
-        }
+
+    // Construct the bundle
+    let mut bundle = BundleRequest::new();
+    for _ in 0..txs_per_block {
+        let mut tx = tx.clone();
+
+        // increment the nonce and apply it
+        nonce += 1.into();
+        tx.nonce = Some(nonce);
+        tx.gas = Some(gas_per_tx);
+
+        // make into typed tx for the signer
+        let tx = tx.into();
+        let signature = provider.signer().sign_transaction(&tx).await?;
+        let rlp = tx.rlp_signed(&signature);
+        bundle = bundle.push_transaction(rlp);
     }
+
+    tracing::info!("signed {} transactions", txs_per_block);
+
+    // configure the bundle to fire it away
+    let block_number = provider.get_block_number().await?;
+    bundle = bundle
+        .set_block(block_number + 1)
+        .set_simulation_block(block_number)
+        .set_simulation_timestamp(0);
+
+    let simulated_bundle = provider.inner().simulate_bundle(&bundle).await?;
+    tracing::info!("simulated {:?}", simulated_bundle);
 
     tracing::debug!("Done! End Block: {}", provider.get_block_number().await?);
 
