@@ -93,7 +93,7 @@ async fn main() -> eyre::Result<()> {
 
     let bundle_middleware = FlashbotsMiddleware::new(
         provider.clone(),
-        Url::parse("https://relay.flashbots.net")?,
+        Url::parse("https://boost-relay-goerli.flashbots.net/")?,
         bundle_signer,
     );
 
