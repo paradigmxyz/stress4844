@@ -169,6 +169,14 @@ async fn main() -> eyre::Result<()> {
         bundle = bundle.push_transaction(rlp);
     }
 
+    let tx = TransactionRequest::new()
+        .to("0x0000000000000000000000000000000000000000".parse::<Address>()?)
+        .value(100)
+        .into();
+    let signature = provider.signer().sign_transaction(&tx).await?;
+    let rlp = tx.rlp_signed(&signature);
+    bundle = bundle.push_transaction(rlp);
+
     tracing::info!("signed {} transactions", txs_per_block);
 
     // configure the bundle to fire it away
