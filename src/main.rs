@@ -148,7 +148,7 @@ async fn main() -> eyre::Result<()> {
     // Sample junk data for the blob.
     let blob = rand::thread_rng()
         .sample_iter(Standard)
-        .take(1024)
+        .take(6 * 1024)
         .collect::<Vec<u8>>();
 
     // Craft the transaction.
@@ -230,8 +230,9 @@ async fn construct_bundle<M: Middleware + 'static>(
     // For each block, we want `fill_pct` -> we generate N transactions to reach that.
     let gas_used_per_block = gas_limit * fill_pct / 100;
 
-    // let txs_per_block = (gas_used_per_block / gas_per_tx).as_u64();
-    let txs_per_block = 10; //  (gas_used_per_block / gas_per_tx).as_u64();
+    let max_txs_per_block = (gas_used_per_block / gas_per_tx).as_u64();
+    tracing::debug!(max_txs_per_block);
+    let txs_per_block = 10;
     let blob_len = tx.data.as_ref().map(|x| x.len()).unwrap_or_default();
     tracing::debug!("submitting {txs_per_block} {blob_len} KB txs per block",);
 
