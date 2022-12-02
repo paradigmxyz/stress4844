@@ -232,7 +232,10 @@ async fn construct_bundle<M: Middleware + 'static>(
 
     let max_txs_per_block = (gas_used_per_block / gas_per_tx).as_u64();
     tracing::debug!(max_txs_per_block);
+
+    // TODO: Figure out why making a bundle too big fails.
     let txs_per_block = 10;
+
     eyre::ensure!(
         max_txs_per_block >= txs_per_block,
         "tried to submit more transactions than can fit in a block"
