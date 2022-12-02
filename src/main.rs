@@ -233,8 +233,12 @@ async fn construct_bundle<M: Middleware + 'static>(
     let max_txs_per_block = (gas_used_per_block / gas_per_tx).as_u64();
     tracing::debug!(max_txs_per_block);
     let txs_per_block = 10;
+    eyre::ensure!(
+        max_txs_per_block >= txs_per_block,
+        "tried to submit more transactions than can fit in a block"
+    );
     let blob_len = tx.data.as_ref().map(|x| x.len()).unwrap_or_default();
-    tracing::debug!("submitting {txs_per_block} {blob_len} KB txs per block",);
+    tracing::debug!("submitting {txs_per_block} {blob_len} byte txs per block",);
 
     let gas_price = provider.get_gas_price().await?;
 
