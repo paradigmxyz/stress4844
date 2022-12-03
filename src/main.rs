@@ -148,7 +148,7 @@ async fn main() -> eyre::Result<()> {
     // Sample junk data for the blob.
     let blob = rand::thread_rng()
         .sample_iter(Standard)
-        .take(6 * 1024)
+        .take(chunk)
         .collect::<Vec<u8>>();
 
     // Craft the transaction.
@@ -233,8 +233,7 @@ async fn construct_bundle<M: Middleware + 'static>(
     let max_txs_per_block = (gas_used_per_block / gas_per_tx).as_u64();
     tracing::debug!(max_txs_per_block);
 
-    // TODO: Figure out why making a bundle too big fails.
-    let txs_per_block = 10;
+    let txs_per_block = max_txs_per_block;
 
     eyre::ensure!(
         max_txs_per_block >= txs_per_block,
@@ -246,6 +245,7 @@ async fn construct_bundle<M: Middleware + 'static>(
     let gas_price = provider.get_gas_price().await?;
 
     // Construct the bundle
+    let mut bundle_gas = U256::zero();
     let mut bundle = BundleRequest::new();
     for _ in 0..txs_per_block {
         let mut tx = tx.clone();
@@ -253,7 +253,10 @@ async fn construct_bundle<M: Middleware + 'static>(
         // increment the nonce and apply it
         tx.nonce = Some(nonce);
         nonce += 1.into();
+        tracing::trace!("signed nonce {}", nonce.as_u64());
         tx.gas = Some(gas_per_tx);
+        tx.gas_price = Some(ethers::utils::parse_units(50, "gwei")?);
+        bundle_gas += gas_per_tx;
 
         // make into typed tx for the signer
         let tx = tx.into();
@@ -262,18 +265,14 @@ async fn construct_bundle<M: Middleware + 'static>(
         bundle = bundle.push_transaction(rlp);
     }
 
-    tracing::debug!("signed {} transactions", txs_per_block);
+    tracing::debug!(
+        "signed {} transactions, bundle gas {}",
+        txs_per_block,
+        bundle_gas
+    );
 
-    // let payment = TransactionRequest::new()
-    //     .to(COINBASE_PAYER_ADDR.parse::<Address>()?)
-    //     .nonce(nonce)
-    //     .gas(30000)
-    //     .gas_price(gas_price)
-    //     .value(payment)
-    //     .into();
-    // let signature = provider.signer().sign_transaction(&payment).await?;
-    // let rlp = tx.rlp_signed(&signature);
-    // bundle = bundle.push_transaction(rlp);
+    let serialized_bundle = serde_json::to_string(&bundle)?;
+    tracing::debug!("bundle size: {} bytes", serialized_bundle.len());
 
     Ok(bundle)
 }
