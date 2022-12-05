@@ -50,4 +50,4 @@ fn initialize_mev_boost(
 
 
     (address, chaind_id, provider);
-} fn initialize
+}

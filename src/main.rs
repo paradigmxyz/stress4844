@@ -68,13 +68,6 @@ const _TX_SLOT_SIZE: usize = 32 * 1024;
 /// to validate whether they fit into the pool or not.
 const _TX_MAX_SIZE: usize = 4 * _TX_SLOT_SIZE; // 128KB
 
-/// 1 kilobyte = 1024 bytes
-const KB: usize = 1024;
-
-/// Arbitrarily chosen number to cover for nonce+from+to+gas price size in a serialized
-/// transaction
-const TRIM_BYTES: usize = 500;
-
 /// Address of the following contract to allow for easy coinbase payments on Goerli.
 ///
 /// contract CoinbasePayer {
@@ -88,30 +81,20 @@ const COINBASE_PAYER_ADDR: &str = "0x060d6635bb76c71871f97C12f10Fa20BD8e87eC0";
 async fn main() -> eyre::Result<()> {
     let opts = Opts::parse();
     let payment = opts.payment;
+    let interval = Duration::from_secs(1);
+    let rpc_url = opts.rpc_url;
+    let tx_signer = opts.tx_signer.strip_prefix("0x").unwrap_or(&opts.tx_signer);
+    let chunks_size = opts.chunk_size;
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(EnvFilter::new("stress4844=trace"))
         .init();
 
-    let interval = Duration::from_secs(1);
-    let rpc_url = opts.rpc_url;
-    let tx_signer = opts.tx_signer.strip_prefix("0x").unwrap_or(&opts.tx_signer);
-
     let (address, chain_id, provider) = initialize_mev_boost(rpc_url, tx_signer);
 
     // TODO: Do we want this to be different per transaction?
     let receiver: Address = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse()?;
-
-    // `CHUNKS_SIZE` Kilobytes per transaction, shave off 500 bytes to leave room for
-    // the other fields to be serialized.
-    let chunk = opts.chunk_size * KB - TRIM_BYTES;
-
-    // Sample junk data for the blob.
-    let blob = rand::thread_rng()
-        .sample_iter(Standard)
-        .take(6 * 1024)
-        .collect::<Vec<u8>>();
 
     // Craft the transaction.
     let tx = TransactionRequest::new()
@@ -129,6 +112,7 @@ async fn main() -> eyre::Result<()> {
         opts.fill_pct,
         nonce,
         payment,
+        chunk_size,
     )
     .await?;
 
