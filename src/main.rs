@@ -7,8 +7,8 @@ use tracing_subscriber::{filter::EnvFilter, prelude::*};
 use std::{sync::Arc, time::Duration};
 
 // local utils
-use bundle_builders::construct_bundle;
-use mev_boost_tools::initialize;
+use stress4844::bundle_builders::construct_bundle;
+use stress4844::mev_boost_tools::initialize_mev_boost;
 
 #[derive(Debug, Parser)]
 struct Opts {
@@ -98,7 +98,7 @@ async fn main() -> eyre::Result<()> {
     let rpc_url = opts.rpc_url;
     let tx_signer = opts.tx_signer.strip_prefix("0x").unwrap_or(&opts.tx_signer);
 
-    let provider = initialize(rpc_url, tx_signer);
+    let (address, chain_id, provider) = initialize_mev_boost(rpc_url, tx_signer);
 
     // TODO: Do we want this to be different per transaction?
     let receiver: Address = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse()?;

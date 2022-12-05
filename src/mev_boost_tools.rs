@@ -5,10 +5,10 @@ use ethers::prelude::{signer::SignerMiddleware, *};
 // general web utils
 use url::Url;
 
-fn initialize(
+fn initialize_mev_boost(
     rpc_url: String,
     tx_signer: String
-) -> FlashbotsMiddleware:: {
+) -> (String, number, FlashbotsMiddleware:: ){
     let bundle_signer = opts
         .bundle_signer
         .strip_prefix("0x")
@@ -49,6 +49,5 @@ fn initialize(
     let chain_id = provider.signer().chain_id();
 
 
-
-
+    (address, chaind_id, provider);
 } fn initialize
