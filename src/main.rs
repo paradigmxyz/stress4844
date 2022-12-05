@@ -255,7 +255,7 @@ async fn construct_bundle<M: Middleware + 'static>(
         nonce += 1.into();
         tracing::trace!("signed nonce {}", nonce.as_u64());
         tx.gas = Some(gas_per_tx);
-        tx.gas_price = Some(ethers::utils::parse_units(50, "gwei")?);
+        tx.gas_price = Some(ethers::utils::parse_units(1, "gwei")?);
         bundle_gas += gas_per_tx;
 
         // make into typed tx for the signer
