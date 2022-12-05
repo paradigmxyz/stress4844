@@ -1,16 +1,14 @@
-// Eth libs
-use ethers::prelude::{signer::SignerMiddleware, *};
-use ethers_flashbots::{BundleRequest, FlashbotsMiddleware};
-
 // CLI
 use clap::Parser;
 use eyre::Result;
 use tracing_subscriber::{filter::EnvFilter, prelude::*};
 
 // Misc
-use rand::{distributions::Standard, Rng};
 use std::{sync::Arc, time::Duration};
-use url::Url;
+
+// local utils
+use bundle_builders::construct_bundle;
+use mev_boost_tools::initialize;
 
 #[derive(Debug, Parser)]
 struct Opts {
@@ -97,46 +95,10 @@ async fn main() -> eyre::Result<()> {
         .init();
 
     let interval = Duration::from_secs(1);
-    let provider = Arc::new(Provider::try_from(opts.rpc_url)?.interval(interval));
-    let signer = opts
-        .tx_signer
-        .strip_prefix("0x")
-        .unwrap_or(&opts.tx_signer)
-        .parse::<LocalWallet>()?;
+    let rpc_url = opts.rpc_url;
+    let tx_signer = opts.tx_signer.strip_prefix("0x").unwrap_or(&opts.tx_signer);
 
-    let bundle_signer = opts
-        .bundle_signer
-        .strip_prefix("0x")
-        .unwrap_or(&opts.bundle_signer)
-        .parse::<LocalWallet>()?;
-
-    let bundle_middleware = FlashbotsMiddleware::new(
-        provider.clone(),
-        Url::parse("https://relay-goerli.flashbots.net/")?,
-        bundle_signer,
-    );
-
-    let address = signer.address();
-    let balance = provider.get_balance(address, None).await?;
-    let block = provider
-        .get_block(BlockNumber::Latest)
-        .await?
-        .expect("could not get latest block");
-    let nonce = provider
-        .get_transaction_count(address, Some(BlockNumber::Pending.into()))
-        .await?;
-
-    tracing::info!(
-        "starting benchmark from {:?} (balance: {} ETH, nonce: {})",
-        address,
-        ethers::core::utils::format_units(balance, "eth")?,
-        nonce
-    );
-    tracing::info!("builder payment {}", payment);
-    tracing::debug!("block gas limit: {} gas", block.gas_limit);
-    let provider =
-        Arc::new(SignerMiddleware::new_with_provider_chain(bundle_middleware, signer).await?);
-    let chain_id = provider.signer().chain_id();
+    let provider = initialize(rpc_url, tx_signer);
 
     // TODO: Do we want this to be different per transaction?
     let receiver: Address = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse()?;
@@ -213,67 +175,4 @@ async fn main() -> eyre::Result<()> {
     tracing::debug!("Done! End Block: {}", provider.get_block_number().await?);
 
     Ok(())
-}
-
-#[tracing::instrument(skip_all, name = "construct_bundle")]
-async fn construct_bundle<M: Middleware + 'static>(
-    provider: Arc<SignerMiddleware<M, LocalWallet>>,
-    tx: &TransactionRequest,
-    gas_limit: U256,
-    fill_pct: u8,
-    mut nonce: U256,
-    payment: U256,
-) -> Result<BundleRequest> {
-    let gas_per_tx = provider.estimate_gas(&tx.clone().into(), None).await?;
-    tracing::debug!("tx cost {} gas", gas_per_tx);
-
-    // For each block, we want `fill_pct` -> we generate N transactions to reach that.
-    let gas_used_per_block = gas_limit * fill_pct / 100;
-
-    let max_txs_per_block = (gas_used_per_block / gas_per_tx).as_u64();
-    tracing::debug!(max_txs_per_block);
-
-    // TODO: Figure out why making a bundle too big fails.
-    let txs_per_block = 10;
-
-    eyre::ensure!(
-        max_txs_per_block >= txs_per_block,
-        "tried to submit more transactions than can fit in a block"
-    );
-    let blob_len = tx.data.as_ref().map(|x| x.len()).unwrap_or_default();
-    tracing::debug!("submitting {txs_per_block} {blob_len} byte txs per block",);
-
-    let gas_price = provider.get_gas_price().await?;
-
-    // Construct the bundle
-    let mut bundle = BundleRequest::new();
-    for _ in 0..txs_per_block {
-        let mut tx = tx.clone();
-
-        // increment the nonce and apply it
-        tx.nonce = Some(nonce);
-        nonce += 1.into();
-        tx.gas = Some(gas_per_tx);
-
-        // make into typed tx for the signer
-        let tx = tx.into();
-        let signature = provider.signer().sign_transaction(&tx).await?;
-        let rlp = tx.rlp_signed(&signature);
-        bundle = bundle.push_transaction(rlp);
-    }
-
-    tracing::debug!("signed {} transactions", txs_per_block);
-
-    // let payment = TransactionRequest::new()
-    //     .to(COINBASE_PAYER_ADDR.parse::<Address>()?)
-    //     .nonce(nonce)
-    //     .gas(30000)
-    //     .gas_price(gas_price)
-    //     .value(payment)
-    //     .into();
-    // let signature = provider.signer().sign_transaction(&payment).await?;
-    // let rlp = tx.rlp_signed(&signature);
-    // bundle = bundle.push_transaction(rlp);
-
-    Ok(bundle)
 }
