@@ -1,14 +1,47 @@
 use rand::{distributions::Standard, Rng};
+
+use ethers::prelude::{signer::SignerMiddleware, *};
+use ethers_flashbots::BundleRequest;
+
 #[tracing::instrument(skip_all, name = "construct_bundle")]
 
 /// 1 kilobyte = 1024 bytes
 const KB: usize = 1024;
 
 /// Arbitrarily chosen number to cover for nonce+from+to+gas price size in a serialized
-/// transaction
+/// transaction.  TODO: get the actual overhead from the signing, etc. to pack more fully
 const TRIM_BYTES: usize = 500;
 
-async fn construct_bundle<M: Middleware + 'static>(
+fn construct_tx(
+    chain_id: u8,
+    address: LocalWallet,
+    receiver: String,
+    data_size: u32,
+    gas_price: U256,
+) -> <ethers::prelude::TransactionRequest as Trait>::TransactionRequest {
+    // Craft the transaction.
+    let blob = generate_random_data(data_size);
+
+    let tx = TransactionRequest::new()
+        .chain_id(chain_id)
+        .value(0)
+        .from(address)
+        .to(receiver)
+        .data(blob)
+        .gas_price(gas_price);
+
+    Ok(tx);
+}
+
+fn generate_random_data(size: u32) -> Vec<u8> {
+    let blob = rand::thread_rng()
+        .sample_iter(Standard)
+        .take(6 * 1024)
+        .collect::<Vec<u8>>();
+    Ok(blob);
+}
+
+pub async fn construct_bundle<M: Middleware + 'static>(
     provider: Arc<SignerMiddleware<M, LocalWallet>>,
     tx: &TransactionRequest,
     gas_limit: U256,
@@ -50,8 +83,10 @@ async fn construct_bundle<M: Middleware + 'static>(
 
     // Construct the bundle
     let mut bundle = BundleRequest::new();
-    for _ in 0..txs_per_block {
-        let mut tx = tx.clone();
+    while true {
+        //for _ in 0..txs_per_block {
+        //    let mut tx = tx.clone();
+        let mut tx = construct_tx(chain_id);
 
         // increment the nonce and apply it
         tx.nonce = Some(nonce);

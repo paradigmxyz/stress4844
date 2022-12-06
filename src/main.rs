@@ -4,11 +4,14 @@ use eyre::Result;
 use tracing_subscriber::{filter::EnvFilter, prelude::*};
 
 // Misc
-use std::{sync::Arc, time::Duration};
+use ethers::prelude::{Address, U256};
+use std::time::Duration;
 
 // local utils
-use stress4844::bundle_builders::construct_bundle;
-use stress4844::mev_boost_tools::initialize_mev_boost;
+mod bundle_builder;
+mod mev_boost_tools;
+//use stress4844::bundle_builders::construct_bundle;
+//use stress4844::mev_boost_tools::initialize_mev_boost;
 
 #[derive(Debug, Parser)]
 struct Opts {
@@ -81,9 +84,15 @@ const COINBASE_PAYER_ADDR: &str = "0x060d6635bb76c71871f97C12f10Fa20BD8e87eC0";
 async fn main() -> eyre::Result<()> {
     let opts = Opts::parse();
     let payment = opts.payment;
+    tracing::info!("builder payment {}", payment);
     let interval = Duration::from_secs(1);
     let rpc_url = opts.rpc_url;
     let tx_signer = opts.tx_signer.strip_prefix("0x").unwrap_or(&opts.tx_signer);
+    let bundle_signer = opts
+        .bundle_signer
+        .strip_prefix("0x")
+        .unwrap_or(&opts.bundle_signer);
+
     let chunks_size = opts.chunk_size;
 
     tracing_subscriber::registry()
@@ -91,21 +100,15 @@ async fn main() -> eyre::Result<()> {
         .with(EnvFilter::new("stress4844=trace"))
         .init();
 
-    let (address, chain_id, provider) = initialize_mev_boost(rpc_url, tx_signer);
+    let (address, chain_id, provider) =
+        mev_boost_tools::initialize_mev_boost(rpc_url, &tx_signer, &bundle_signer);
 
     // TODO: Do we want this to be different per transaction?
     let receiver: Address = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse()?;
 
-    // Craft the transaction.
-    let tx = TransactionRequest::new()
-        .chain_id(chain_id)
-        .value(0)
-        .from(address)
-        .to(receiver)
-        .data(blob)
-        .gas_price(opts.gas_price);
+    // let
 
-    let mut bundle = construct_bundle(
+    let mut bundle = bundle_builder::construct_bundle(
         provider.clone(),
         &tx,
         block.gas_limit,
