@@ -1,6 +1,7 @@
 // ethereum specific
+use crate::mev_boost_tools::k256::schnorr::SigningKey;
 use ethers::prelude::{signer::SignerMiddleware, *};
-use ethers_flashbots::{BundleRequest, FlashbotsMiddleware};
+use ethers_flashbots::FlashbotsMiddleware;
 
 // general web utils
 use std::{sync::Arc, time::Duration};
@@ -10,7 +11,18 @@ pub async fn initialize_mev_boost(
     rpc_url: String,
     tx_signer: String,
     bundle_signer: String,
-) -> (String, u8, FlashbotsMiddleware::FlashbotsMiddleware) {
+    interval: Duration,
+) -> (
+    H160,
+    U256,
+    u64,
+    Arc<
+        SignerMiddleware<
+            FlashbotsMiddleware<Arc<Provider<Provider>>, Wallet<SigningKey>>,
+            Wallet<SigningKey>,
+        >,
+    >,
+) {
     let bundle_signer = bundle_signer.parse::<LocalWallet>()?;
 
     let provider = Arc::new(Provider::try_from(rpc_url)?.interval(interval));
@@ -43,5 +55,5 @@ pub async fn initialize_mev_boost(
         Arc::new(SignerMiddleware::new_with_provider_chain(bundle_middleware, signer).await?);
     let chain_id = provider.signer().chain_id();
 
-    (address, chain_id, provider);
+    return (address, nonce, chain_id, provider);
 }

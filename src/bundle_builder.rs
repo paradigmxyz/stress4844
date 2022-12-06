@@ -1,24 +1,24 @@
 use rand::{distributions::Standard, Rng};
+use std::sync::Arc;
 
 use ethers::prelude::{signer::SignerMiddleware, *};
 use ethers_flashbots::BundleRequest;
 
-#[tracing::instrument(skip_all, name = "construct_bundle")]
-
 /// 1 kilobyte = 1024 bytes
-const KB: usize = 1024;
+const KB: u32 = 1024;
 
 /// Arbitrarily chosen number to cover for nonce+from+to+gas price size in a serialized
 /// transaction.  TODO: get the actual overhead from the signing, etc. to pack more fully
-const TRIM_BYTES: usize = 500;
+const TRIM_BYTES: u32 = 500;
 
+#[tracing::instrument(skip_all, name = "construct_bundle")]
 fn construct_tx(
-    chain_id: u8,
-    address: LocalWallet,
-    receiver: String,
+    chain_id: u64,
+    address: <Wallet<ethers::core::k256::ecdsa::SigningKey> as Trait>::SignerMiddleware,
+    receiver: Address,
     data_size: u32,
     gas_price: U256,
-) -> <ethers::prelude::TransactionRequest as Trait>::TransactionRequest {
+) -> ethers::prelude::TransactionRequest {
     // Craft the transaction.
     let blob = generate_random_data(data_size);
 
@@ -30,7 +30,7 @@ fn construct_tx(
         .data(blob)
         .gas_price(gas_price);
 
-    Ok(tx);
+    return tx;
 }
 
 fn generate_random_data(size: u32) -> Vec<u8> {
@@ -38,18 +38,20 @@ fn generate_random_data(size: u32) -> Vec<u8> {
         .sample_iter(Standard)
         .take(6 * 1024)
         .collect::<Vec<u8>>();
-    Ok(blob);
+    return blob;
 }
 
 pub async fn construct_bundle<M: Middleware + 'static>(
+    chain_id: u64,
+    address: H160,
+    receiver: Address,
     provider: Arc<SignerMiddleware<M, LocalWallet>>,
-    tx: &TransactionRequest,
     gas_limit: U256,
     fill_pct: u8,
     mut nonce: U256,
     payment: U256,
     chunk_size: U256,
-) -> Result<BundleRequest> {
+) -> Result<BundleRequest, eyre::ErrReport> {
     // `CHUNKS_SIZE` Kilobytes per transaction, shave off 500 bytes to leave room for
     // the other fields to be serialized.
     let chunk = chunk_size * KB - TRIM_BYTES;
@@ -60,24 +62,20 @@ pub async fn construct_bundle<M: Middleware + 'static>(
         .take(6 * 1024)
         .collect::<Vec<u8>>();
 
-    let gas_per_tx = provider.estimate_gas(&tx.clone().into(), None).await?;
-    tracing::debug!("tx cost {} gas", gas_per_tx);
-
     // For each block, we want `fill_pct` -> we generate N transactions to reach that.
     let gas_used_per_block = gas_limit * fill_pct / 100;
+    let data_size: u32 = fill_pct as u32 * 2 * 1024 * KB;
 
-    let max_txs_per_block = (gas_used_per_block / gas_per_tx).as_u64();
-    tracing::debug!(max_txs_per_block);
+    //let max_txs_per_block = (gas_used_per_block / gas_per_tx).as_u64();
+    //tracing::debug!(max_txs_per_block);
 
     // TODO: Figure out why making a bundle too big fails.
     let txs_per_block = 10;
 
     eyre::ensure!(
-        max_txs_per_block >= txs_per_block,
+        true, //max_txs_per_block >= txs_per_block,
         "tried to submit more transactions than can fit in a block"
     );
-    let blob_len = tx.data.as_ref().map(|x| x.len()).unwrap_or_default();
-    tracing::debug!("submitting {txs_per_block} {blob_len} byte txs per block",);
 
     let gas_price = provider.get_gas_price().await?;
 
@@ -86,7 +84,11 @@ pub async fn construct_bundle<M: Middleware + 'static>(
     while true {
         //for _ in 0..txs_per_block {
         //    let mut tx = tx.clone();
-        let mut tx = construct_tx(chain_id);
+        let mut tx = construct_tx(chain_id, address, receiver, data_size, gas_price);
+        let gas_per_tx = provider.estimate_gas(&tx.clone().into(), None).await?;
+        tracing::debug!("tx cost {} gas", gas_per_tx);
+        let blob_len = tx.data.as_ref().map(|x| x.len()).unwrap_or_default();
+        tracing::debug!("submitting {txs_per_block} {blob_len} byte txs per block",);
 
         // increment the nonce and apply it
         tx.nonce = Some(nonce);

@@ -100,8 +100,13 @@ async fn main() -> eyre::Result<()> {
         .with(EnvFilter::new("stress4844=trace"))
         .init();
 
-    let (address, chain_id, provider) =
-        mev_boost_tools::initialize_mev_boost(rpc_url, &tx_signer, &bundle_signer);
+    let (address, nonce, chain_id, provider) = mev_boost_tools::initialize_mev_boost(
+        rpc_url,
+        tx_signer.to_string(),
+        bundle_signer.to_string(),
+        interval,
+    )
+    .await?;
 
     // TODO: Do we want this to be different per transaction?
     let receiver: Address = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse()?;
@@ -109,8 +114,10 @@ async fn main() -> eyre::Result<()> {
     // let
 
     let mut bundle = bundle_builder::construct_bundle(
+        chain_id,
+        address,
+        receiver,
         provider.clone(),
-        &tx,
         block.gas_limit,
         opts.fill_pct,
         nonce,
