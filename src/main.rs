@@ -111,7 +111,10 @@ async fn main() -> eyre::Result<()> {
     // TODO: Do we want this to be different per transaction?
     let receiver: Address = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse()?;
 
-    // let
+    let block = provider
+        .get_block(BlockNumber::Latest)
+        .await?
+        .expect("could not get latest block");
 
     let mut bundle = bundle_builder::construct_bundle(
         chain_id,
@@ -131,6 +134,10 @@ async fn main() -> eyre::Result<()> {
     tracing::info!("subscribed to blocks - waiting for next");
     while block_sub.next().await.is_some() {
         let block_number = provider.get_block_number().await?;
+        let block = provider
+            .get_block(BlockNumber::Latest)
+            .await?
+            .expect("could not get latest block");
 
         let span = tracing::trace_span!("submit-bundle", block = block_number.as_u64());
         let _enter = span.enter();
@@ -155,9 +162,11 @@ async fn main() -> eyre::Result<()> {
                     address,
                     receiver,
                     provider,
+                    block.gas_limit,
                     opts.fill_pct,
                     nonce,
                     payment,
+                    chunk_size,
                 )
                 .await?;
             }

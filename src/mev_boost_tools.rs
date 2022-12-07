@@ -39,10 +39,6 @@ pub async fn initialize_mev_boost(
 
     let address = signer.address();
     let balance = provider.get_balance(address, None).await?;
-    let block = provider
-        .get_block(BlockNumber::Latest)
-        .await?
-        .expect("could not get latest block");
     let nonce = provider
         .get_transaction_count(address, Some(BlockNumber::Pending.into()))
         .await?;

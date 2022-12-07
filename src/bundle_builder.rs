@@ -16,7 +16,7 @@ fn construct_tx(
     chain_id: u64,
     address: Address,
     receiver: Address,
-    data_size: u32,
+    data_size: usize,
     gas_price: U256,
 ) -> ethers::prelude::TransactionRequest {
     // Craft the transaction.
