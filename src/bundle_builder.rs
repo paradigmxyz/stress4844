@@ -5,7 +5,7 @@ use ethers::prelude::{signer::SignerMiddleware, *};
 use ethers_flashbots::BundleRequest;
 
 /// 1 kilobyte = 1024 bytes
-const KB: u32 = 1024;
+const KB: usize = 1024;
 
 /// Arbitrarily chosen number to cover for nonce+from+to+gas price size in a serialized
 /// transaction.  TODO: get the actual overhead from the signing, etc. to pack more fully
@@ -14,7 +14,7 @@ const TRIM_BYTES: u32 = 500;
 #[tracing::instrument(skip_all, name = "construct_bundle")]
 fn construct_tx(
     chain_id: u64,
-    address: <Wallet<ethers::core::k256::ecdsa::SigningKey> as Trait>::SignerMiddleware,
+    address: Address,
     receiver: Address,
     data_size: u32,
     gas_price: U256,
@@ -33,10 +33,10 @@ fn construct_tx(
     return tx;
 }
 
-fn generate_random_data(size: u32) -> Vec<u8> {
+fn generate_random_data(size: usize) -> Vec<u8> {
     let blob = rand::thread_rng()
         .sample_iter(Standard)
-        .take(6 * 1024)
+        .take(size) //6 * 1024)
         .collect::<Vec<u8>>();
     return blob;
 }
@@ -64,7 +64,7 @@ pub async fn construct_bundle<M: Middleware + 'static>(
 
     // For each block, we want `fill_pct` -> we generate N transactions to reach that.
     let gas_used_per_block = gas_limit * fill_pct / 100;
-    let data_size: u32 = fill_pct as u32 * 2 * 1024 * KB;
+    let data_size: usize = fill_pct as usize * 2 * 1024 * KB;
 
     //let max_txs_per_block = (gas_used_per_block / gas_per_tx).as_u64();
     //tracing::debug!(max_txs_per_block);
@@ -81,10 +81,12 @@ pub async fn construct_bundle<M: Middleware + 'static>(
 
     // Construct the bundle
     let mut bundle = BundleRequest::new();
+
+    // fix the true condition to "while space left in the block/bundle"
     while true {
         //for _ in 0..txs_per_block {
         //    let mut tx = tx.clone();
-        let mut tx = construct_tx(chain_id, address, receiver, data_size, gas_price);
+        let mut tx = construct_tx(chain_id, address, receiver, data_size as u32, gas_price);
         let gas_per_tx = provider.estimate_gas(&tx.clone().into(), None).await?;
         tracing::debug!("tx cost {} gas", gas_per_tx);
         let blob_len = tx.data.as_ref().map(|x| x.len()).unwrap_or_default();
