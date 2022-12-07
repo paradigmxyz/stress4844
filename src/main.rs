@@ -4,7 +4,7 @@ use eyre::Result;
 use tracing_subscriber::{filter::EnvFilter, prelude::*};
 
 // Misc
-use ethers::prelude::{Address, U256};
+use ethers::prelude::{Address, BlockNumber, U256};
 use std::time::Duration;
 
 // local utils
@@ -93,7 +93,7 @@ async fn main() -> eyre::Result<()> {
         .strip_prefix("0x")
         .unwrap_or(&opts.bundle_signer);
 
-    let chunks_size = opts.chunk_size;
+    let chunk_size = ethers::prelude::U256::from(opts.chunk_size);
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
@@ -150,10 +150,11 @@ async fn main() -> eyre::Result<()> {
                     .get_transaction_count(address, Some(BlockNumber::Pending.into()))
                     .await?;
                 tracing::debug!("signing new bundle for next block (new nonce: {})", nonce);
-                bundle = construct_bundle(
+                bundle = bundle_builder::construct_bundle(
                     provider.clone(),
-                    &tx,
-                    block.gas_limit,
+                    address,
+                    receiver,
+                    provider,
                     opts.fill_pct,
                     nonce,
                     payment,

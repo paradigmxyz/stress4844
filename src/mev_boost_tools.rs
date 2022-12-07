@@ -12,17 +12,20 @@ pub async fn initialize_mev_boost(
     tx_signer: String,
     bundle_signer: String,
     interval: Duration,
-) -> (
-    H160,
-    U256,
-    u64,
-    Arc<
-        SignerMiddleware<
-            FlashbotsMiddleware<Arc<Provider<Provider>>, Wallet<SigningKey>>,
-            Wallet<SigningKey>,
+) -> Result<
+    (
+        H160,
+        U256,
+        u64,
+        Arc<
+            SignerMiddleware<
+                FlashbotsMiddleware<Arc<Provider<Provider>>, Wallet<SigningKey>>,
+                Wallet<SigningKey>,
+            >,
         >,
-    >,
-) {
+    ),
+    ProviderError,
+> {
     let bundle_signer = bundle_signer.parse::<LocalWallet>()?;
 
     let provider = Arc::new(Provider::try_from(rpc_url)?.interval(interval));
@@ -55,5 +58,5 @@ pub async fn initialize_mev_boost(
         Arc::new(SignerMiddleware::new_with_provider_chain(bundle_middleware, signer).await?);
     let chain_id = provider.signer().chain_id();
 
-    return (address, nonce, chain_id, provider);
+    Ok((address, nonce, chain_id, provider));
 }
