@@ -58,19 +58,6 @@ fn http_provider(s: &str) -> Result<String, String> {
     }
 }
 
-// From: https://github.com/ethereum/go-ethereum/blob/c2e0abce2eedc1ba2a1b32c46fd07ef18a25354a/core/txpool/txpool.go#L44-L55
-/// `TX_SLOT_SIZE` is used to calculate how many data slots a single transaction
-/// takes up based on its size. The slots are used as DoS protection, ensuring
-/// that validating a new transaction remains a constant operation (in reality
-/// O(maxslots), where max slots are 4 currently).
-const _TX_SLOT_SIZE: usize = 32 * 1024;
-
-/// txMaxSize is the maximum size a single transaction can have. This field has
-/// non-trivial consequences: larger transactions are significantly harder and
-/// more expensive to propagate; larger transactions also take more resources
-/// to validate whether they fit into the pool or not.
-const _TX_MAX_SIZE: usize = 4 * _TX_SLOT_SIZE; // 128KB
-
 /// Address of the following contract to allow for easy coinbase payments on Goerli.
 ///
 /// contract CoinbasePayer {
@@ -92,15 +79,18 @@ async fn main() -> eyre::Result<()> {
         .bundle_signer
         .strip_prefix("0x")
         .unwrap_or(&opts.bundle_signer);
+    let landed = 0;
+    let blocks_to_land = opts.blocks;
+    let fill_pct = opts.fill_pct;
 
-    let chunk_size = ethers::prelude::U256::from(opts.chunk_size);
+    let chunk_size = ethers::prelude::U256::from(opts.chunk_size); // for example, 384, 512, etc.
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(EnvFilter::new("stress4844=trace"))
         .init();
 
-    let (address, nonce, chain_id, provider) = mev_boost_tools::initialize_mev_boost(
+    let (address, mut nonce, chain_id, provider) = mev_boost_tools::initialize_mev_boost(
         rpc_url,
         tx_signer.to_string(),
         bundle_signer.to_string(),
@@ -122,22 +112,25 @@ async fn main() -> eyre::Result<()> {
         receiver,
         provider.clone(),
         block.gas_limit,
-        opts.fill_pct,
+        fill_pct,
         nonce,
         payment,
         chunk_size,
     )
     .await?;
+    // should always be 30 million:
+    tracing::debug!("block gas limit: {} gas", block.gas_limit);
 
     // on every block try to get the bundle in
     let mut block_sub = provider.watch_blocks().await?;
     tracing::info!("subscribed to blocks - waiting for next");
-    while block_sub.next().await.is_some() {
+    while block_sub.next().await.is_some() && landed <= blocks_to_land {
         let block_number = provider.get_block_number().await?;
         let block = provider
             .get_block(BlockNumber::Latest)
             .await?
             .expect("could not get latest block");
+        tracing::debug!("block gas limit: {} gas", block.gas_limit);
 
         let span = tracing::trace_span!("submit-bundle", block = block_number.as_u64());
         let _enter = span.enter();
@@ -152,26 +145,28 @@ async fn main() -> eyre::Result<()> {
         match pending_bundle.await {
             Ok(bundle_hash) => {
                 // TODO: Can we log more info from the Flashbots API?
-                tracing::info!("bundle included! hash: {:?}", bundle_hash);
-                let nonce = provider
+                tracing::info!("bundle #{} included! hash: {:?}", landed, bundle_hash);
+                nonce = provider
                     .get_transaction_count(address, Some(BlockNumber::Pending.into()))
-                    .await?;
+                    .await?; // TODO: keep track of nonce ourselves?
                 tracing::debug!("signing new bundle for next block (new nonce: {})", nonce);
                 bundle = bundle_builder::construct_bundle(
-                    provider.clone(),
+                    chain_id,
                     address,
                     receiver,
-                    provider,
+                    provider.clone(),
                     block.gas_limit,
-                    opts.fill_pct,
+                    fill_pct,
                     nonce,
                     payment,
                     chunk_size,
                 )
                 .await?;
+
+                landed += 1; // actually check if we landed it?
             }
             Err(err) => {
-                tracing::error!("{}. Retrying.", err);
+                tracing::error!("{}. did not land bundle, retrying.", err);
             }
         }
     }

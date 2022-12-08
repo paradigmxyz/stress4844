@@ -56,21 +56,18 @@ pub async fn construct_bundle<M: Middleware + 'static>(
     // the other fields to be serialized.
     let chunk = chunk_size * KB - TRIM_BYTES;
 
-    // Sample junk data for the blob.
-    let blob = rand::thread_rng()
-        .sample_iter(Standard)
-        .take(6 * 1024)
-        .collect::<Vec<u8>>();
-
     // For each block, we want `fill_pct` -> we generate N transactions to reach that.
     let gas_used_per_block = gas_limit * fill_pct / 100;
-    let data_size: usize = fill_pct as usize * 2 * 1024 * KB;
+    let data_size: usize = fill_pct as usize * 2 * 1024 * KB; // block max size is 2MB
+    tracing::debug!("data size: {}", data_size);
+    let blob = generate_random_data(data_size);
 
     //let max_txs_per_block = (gas_used_per_block / gas_per_tx).as_u64();
     //tracing::debug!(max_txs_per_block);
 
+    let current_gas_used = TRIM_BYTES;
     // TODO: Figure out why making a bundle too big fails.
-    let txs_per_block = 10;
+    let txs_per_block = 1;
 
     eyre::ensure!(
         true, //max_txs_per_block >= txs_per_block,
@@ -86,7 +83,7 @@ pub async fn construct_bundle<M: Middleware + 'static>(
     while true {
         //for _ in 0..txs_per_block {
         //    let mut tx = tx.clone();
-        let mut tx = construct_tx(chain_id, address, receiver, data_size as u32, gas_price);
+        let mut tx = construct_tx(chain_id, address, receiver, data_size, gas_price);
         let gas_per_tx = provider.estimate_gas(&tx.clone().into(), None).await?;
         tracing::debug!("tx cost {} gas", gas_per_tx);
         let blob_len = tx.data.as_ref().map(|x| x.len()).unwrap_or_default();

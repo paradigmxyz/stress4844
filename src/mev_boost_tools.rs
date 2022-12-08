@@ -19,7 +19,7 @@ pub async fn initialize_mev_boost(
         u64,
         Arc<
             SignerMiddleware<
-                FlashbotsMiddleware<Arc<Provider<Provider>>, Wallet<SigningKey>>,
+                FlashbotsMiddleware<Arc<Provider<Provider<_>>>, Wallet<SigningKey>>,
                 Wallet<SigningKey>,
             >,
         >,
@@ -49,7 +49,6 @@ pub async fn initialize_mev_boost(
         ethers::core::utils::format_units(balance, "eth")?,
         nonce
     );
-    tracing::debug!("block gas limit: {} gas", block.gas_limit);
     let provider =
         Arc::new(SignerMiddleware::new_with_provider_chain(bundle_middleware, signer).await?);
     let chain_id = provider.signer().chain_id();
