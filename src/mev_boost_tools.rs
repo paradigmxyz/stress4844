@@ -16,10 +16,9 @@ pub async fn initialize_mev_boost(
     (
         H160,
         U256,
-        u64,
         Arc<
             SignerMiddleware<
-                FlashbotsMiddleware<Arc<Provider<Provider<_>>>, Wallet<SigningKey>>,
+                FlashbotsMiddleware<Arc<Provider<Provider>>, Wallet<SigningKey>>,
                 Wallet<SigningKey>,
             >,
         >,
@@ -33,25 +32,21 @@ pub async fn initialize_mev_boost(
 
     let bundle_middleware = FlashbotsMiddleware::new(
         provider.clone(),
-        Url::parse("https://relay-goerli.flashbots.net/")?,
+        Url::parse("https://relay-goerli.flashbots.net/")?, // TODO: make configurable
         bundle_signer,
     );
 
     let address = signer.address();
     let balance = provider.get_balance(address, None).await?;
-    let nonce = provider
-        .get_transaction_count(address, Some(BlockNumber::Pending.into()))
-        .await?;
 
     tracing::info!(
-        "starting benchmark from {:?} (balance: {} ETH, nonce: {})",
+        "starting benchmark from {:?} (balance: {} ETH)",
         address,
         ethers::core::utils::format_units(balance, "eth")?,
-        nonce
     );
     let provider =
         Arc::new(SignerMiddleware::new_with_provider_chain(bundle_middleware, signer).await?);
     let chain_id = provider.signer().chain_id();
 
-    Ok((address, nonce, chain_id, provider));
+    Ok((address, chain_id, provider));
 }

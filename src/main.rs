@@ -83,14 +83,15 @@ async fn main() -> eyre::Result<()> {
     let blocks_to_land = opts.blocks;
     let fill_pct = opts.fill_pct;
 
-    let chunk_size = ethers::prelude::U256::from(opts.chunk_size); // for example, 384, 512, etc.
+    let chunk_size = opts.chunk_size;
+    //let chunk_size = ethers::prelude::U256::from(opts.chunk_size); // for example, 384, 512, etc.
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(EnvFilter::new("stress4844=trace"))
         .init();
 
-    let (address, mut nonce, chain_id, provider) = mev_boost_tools::initialize_mev_boost(
+    let (address, chain_id, provider) = mev_boost_tools::initialize_mev_boost(
         rpc_url,
         tx_signer.to_string(),
         bundle_signer.to_string(),
@@ -98,6 +99,10 @@ async fn main() -> eyre::Result<()> {
     )
     .await?;
 
+    let mut nonce = provider
+        .get_transaction_count(address, Some(BlockNumber::Pending.into()))
+        .await?;
+    tracing::debug!("current nonce: {}", nonce);
     // TODO: Do we want this to be different per transaction?
     let receiver: Address = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse()?;
 
