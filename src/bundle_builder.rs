@@ -1,15 +1,17 @@
+use crate::mev_boost_tools::k256::schnorr::SigningKey;
 use rand::{distributions::Standard, Rng};
 use std::sync::Arc;
 
 use ethers::prelude::{signer::SignerMiddleware, *};
 use ethers_flashbots::BundleRequest;
+use ethers_flashbots::FlashbotsMiddleware;
 
 /// 1 kilobyte = 1024 bytes
 const KB: usize = 1024;
 
 /// Arbitrarily chosen number to cover for nonce+from+to+gas price size in a serialized
 /// transaction.  TODO: get the actual overhead from the signing, etc. to pack more fully
-const TRIM_BYTES: usize = 500;
+const TRIM_BYTES: usize = 300;
 
 #[tracing::instrument(skip_all, name = "construct_bundle")]
 fn construct_tx(
@@ -33,8 +35,20 @@ fn construct_tx(
     return tx;
 }
 
-async fn get_signed_tx(chain_id: u64,
-address: H160, receiver: H160, chunk:usize, gas_price: U256, provider, nonce: U256)-> Result<Bytes, WalletError> {
+async fn get_signed_tx(
+    chain_id: u64,
+    address: H160,
+    receiver: H160,
+    chunk: usize,
+    gas_price: U256,
+    provider: Arc<
+        SignerMiddleware<
+            FlashbotsMiddleware<Arc<Provider<Provider<Http>>>, Wallet<SigningKey>>,
+            Wallet<SigningKey>,
+        >,
+    >,
+    nonce: U256,
+) -> Result<Bytes, WalletError> {
     let mut tx = construct_tx(chain_id, address, receiver, chunk, gas_price);
     let gas_per_tx = provider.estimate_gas(&tx.clone().into(), None).await?;
     tracing::debug!("tx cost {} gas", gas_per_tx);
@@ -104,18 +118,28 @@ pub async fn construct_bundle<M: Middleware + 'static>(
     let mut bundle = BundleRequest::new();
 
     for _ in 0..txs_per_block {
-        let rlp = get_signed_tx(chain_id, address, receiver, chunk, gas_price, &provider, nonce).await?;
+        let rlp = get_signed_tx(
+            chain_id, address, receiver, chunk, gas_price, &provider, nonce,
+        )
+        .await?;
         bundle = bundle.push_transaction(rlp);
         nonce += 1.into();
-
-   }
+    }
 
     tracing::debug!("signed {} transactions, filling remainder", txs_per_block);
     // fill the "remainder" of the block with leftover datasize, since we ha
     let remaining_data = 0;
-    let last_rlp = get_signed_tx(chain_id, address, receiver, remaining_data, gas_price, &provider, nonce).await?;
+    let last_rlp = get_signed_tx(
+        chain_id,
+        address,
+        receiver,
+        remaining_data,
+        gas_price,
+        &provider,
+        nonce,
+    )
+    .await?;
     bundle = bundle.push_transaction(last_rlp);
-
 
     // let payment = TransactionRequest::new()
     //     .to(COINBASE_PAYER_ADDR.parse::<Address>()?)
@@ -127,7 +151,6 @@ pub async fn construct_bundle<M: Middleware + 'static>(
     // let signature = provider.signer().sign_transaction(&payment).await?;
     // let rlp = tx.rlp_signed(&signature);
     // bundle = bundle.push_transaction(rlp);
-
 
     Ok(bundle)
 }
