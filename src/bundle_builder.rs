@@ -1,10 +1,9 @@
-use crate::mev_boost_tools::k256::schnorr::SigningKey;
 use rand::{distributions::Standard, Rng};
-use std::sync::Arc;
 
-use ethers::prelude::{signer::SignerMiddleware, *};
+use ethers::prelude::*;
 use ethers_flashbots::BundleRequest;
-use ethers_flashbots::FlashbotsMiddleware;
+
+use eyre::Result;
 
 /// 1 kilobyte = 1024 bytes
 const KB: usize = 1024;
@@ -35,20 +34,18 @@ fn construct_tx(
     return tx;
 }
 
-async fn get_signed_tx(
+async fn get_signed_tx<M: Middleware>(
     chain_id: u64,
     address: H160,
     receiver: H160,
     chunk: usize,
     gas_price: U256,
-    provider: Arc<
-        SignerMiddleware<
-            FlashbotsMiddleware<Arc<Provider<Provider<Http>>>, Wallet<SigningKey>>,
-            Wallet<SigningKey>,
-        >,
-    >,
+    provider: M,
     nonce: U256,
-) -> Result<Bytes, WalletError> {
+) -> Result<Bytes>
+where
+    M::Error: 'static,
+{
     let mut tx = construct_tx(chain_id, address, receiver, chunk, gas_price);
     let gas_per_tx = provider.estimate_gas(&tx.clone().into(), None).await?;
     tracing::debug!("tx cost {} gas", gas_per_tx);
@@ -61,7 +58,8 @@ async fn get_signed_tx(
 
     // make into typed tx for the signer
     let tx = tx.into();
-    let signature = provider.signer().sign_transaction(&tx).await?;
+    let sender = provider.default_sender().unwrap_or_default();
+    let signature = provider.sign_transaction(&tx, sender).await?;
     let rlp = tx.rlp_signed(&signature);
     Ok(rlp)
 }
@@ -74,17 +72,20 @@ fn generate_random_data(size: usize) -> Vec<u8> {
     return blob;
 }
 
-pub async fn construct_bundle<M: Middleware + 'static>(
+pub async fn construct_bundle<M: Middleware>(
     chain_id: u64,
     address: H160,
     receiver: Address,
-    provider: Arc<SignerMiddleware<M, LocalWallet>>,
+    provider: M,
     gas_limit: U256,
     fill_pct: u8,
     mut nonce: U256,
     payment: U256,
     chunk_size: usize,
-) -> Result<BundleRequest, eyre::ErrReport> {
+) -> Result<BundleRequest>
+where
+    M::Error: 'static,
+{
     // `CHUNKS_SIZE` Kilobytes per transaction, shave off 500 bytes to leave room for
     // the other fields to be serialized.
     let chunk = chunk_size * KB - TRIM_BYTES;

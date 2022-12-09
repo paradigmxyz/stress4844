@@ -4,14 +4,14 @@ use eyre::Result;
 use tracing_subscriber::{filter::EnvFilter, prelude::*};
 
 // Misc
-use ethers::prelude::{Address, BlockNumber, U256};
+use ethers::prelude::*;
+use ethers_flashbots::FlashbotsMiddleware;
+use std::sync::Arc;
 use std::time::Duration;
+use url::Url;
 
 // local utils
 mod bundle_builder;
-mod mev_boost_tools;
-//use stress4844::bundle_builders::construct_bundle;
-//use stress4844::mev_boost_tools::initialize_mev_boost;
 
 #[derive(Debug, Parser)]
 struct Opts {
@@ -79,7 +79,7 @@ async fn main() -> eyre::Result<()> {
         .bundle_signer
         .strip_prefix("0x")
         .unwrap_or(&opts.bundle_signer);
-    let landed = 0;
+    let mut landed = 0;
     let blocks_to_land = opts.blocks;
     let fill_pct = opts.fill_pct;
 
@@ -91,13 +91,30 @@ async fn main() -> eyre::Result<()> {
         .with(EnvFilter::new("stress4844=trace"))
         .init();
 
-    let (address, chain_id, provider) = mev_boost_tools::initialize_mev_boost(
-        rpc_url,
-        tx_signer.to_string(),
-        bundle_signer.to_string(),
-        interval,
-    )
-    .await?;
+    let bundle_signer = bundle_signer.parse::<LocalWallet>()?;
+
+    let provider: Arc<Provider<Http>> =
+        Arc::new(Provider::<Http>::try_from(rpc_url)?.interval(interval));
+
+    let signer = tx_signer.parse::<LocalWallet>()?;
+
+    let bundle_middleware = FlashbotsMiddleware::new(
+        provider.clone(),
+        Url::parse("https://relay-goerli.flashbots.net/")?, // TODO: make configurable
+        bundle_signer,
+    );
+
+    let address = signer.address();
+    let balance = provider.get_balance(address, None).await?;
+
+    tracing::info!(
+        "starting benchmark from {:?} (balance: {} ETH)",
+        address,
+        ethers::core::utils::format_units(balance, "eth")?,
+    );
+    let provider =
+        Arc::new(SignerMiddleware::new_with_provider_chain(bundle_middleware, signer).await?);
+    let chain_id = provider.signer().chain_id();
 
     let mut nonce = provider
         .get_transaction_count(address, Some(BlockNumber::Pending.into()))
