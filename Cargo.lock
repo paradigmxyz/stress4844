@@ -3138,6 +3138,8 @@ dependencies = [
  "ethers-flashbots",
  "eyre",
  "fastrand",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

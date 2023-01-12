@@ -60,7 +60,15 @@ where
     let tx = tx.into();
     let sender = provider.default_sender().unwrap_or_default();
     let signature = provider.sign_transaction(&tx, sender).await?;
+    tracing::debug!("sender is {sender} , signature = {signature}");
     let rlp = tx.rlp_signed(&signature);
+
+    println!("{}", serde_json::to_string(&tx)?);
+
+    // ad hoc test: submit directly
+    let tx = provider.send_transaction(tx, None).await?.await?;
+
+    println!("{}", serde_json::to_string(&tx)?);
     Ok(rlp)
 }
 
@@ -101,12 +109,10 @@ where
         chunk
     );
 
-    let blob = generate_random_data(chunk);
-
     //let max_txs_per_block = (gas_used_per_block / gas_per_tx).as_u64();
     //tracing::debug!(max_txs_per_block);
 
-    let current_gas_used = TRIM_BYTES;
+    let mut current_data_used = TRIM_BYTES;
     // TODO: Figure out why making a bundle too big fails.
     let txs_per_block = total_data_size / chunk;
     tracing::debug!("txs per block: {}", txs_per_block);
@@ -128,11 +134,12 @@ where
         .await?;
         bundle = bundle.push_transaction(rlp);
         nonce += 1.into();
+        current_data_used += chunk;
     }
 
     tracing::debug!("signed {} transactions, filling remainder", txs_per_block);
     // fill the "remainder" of the block with leftover datasize, since we ha
-    let remaining_data = 0;
+    let remaining_data = total_data_size - current_data_used - TRIM_BYTES;
     let last_rlp = get_signed_tx(
         chain_id,
         address,
