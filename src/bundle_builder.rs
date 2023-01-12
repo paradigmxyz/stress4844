@@ -20,7 +20,7 @@ fn construct_tx(
     data_size: usize,
     gas_price: U256,
 ) -> ethers::prelude::TransactionRequest {
-    // Craft the transaction.
+    // Craft the transaction.  data_size is in bytes
     let blob = generate_random_data(data_size);
 
     let tx = TransactionRequest::new()
@@ -65,6 +65,7 @@ where
 }
 
 fn generate_random_data(size: usize) -> Vec<u8> {
+    // size is bytes
     let blob = rand::thread_rng()
         .sample_iter(Standard)
         .take(size) //6 * 1024)
@@ -86,17 +87,18 @@ pub async fn construct_bundle<M: Middleware>(
 where
     M::Error: 'static,
 {
-    // `CHUNKS_SIZE` Kilobytes per transaction, shave off 500 bytes to leave room for
+    // `CHUNKS_SIZE` Kilobytes per transaction, shave off 300 bytes to leave room for
     // the other fields to be serialized.
     let chunk = chunk_size * KB - TRIM_BYTES;
 
     // For each block, we want `fill_pct` -> we generate N transactions to reach that.
     let gas_used_per_block = gas_limit * fill_pct / 100;
-    let total_data_size: usize = fill_pct as usize * 2 * 1024 * KB; // block max size is 2MB
+    let total_data_size: usize = fill_pct as usize * 2 * 1024 * KB / 100; // block max size is 2MB
     tracing::debug!(
-        "data size: {}, gas_used_per_block: {}",
+        "total data size: {}, gas_used_per_block: {}, blob size (bytes) per tx: {}",
         total_data_size,
-        gas_used_per_block
+        gas_used_per_block,
+        chunk
     );
 
     let blob = generate_random_data(chunk);
@@ -106,7 +108,8 @@ where
 
     let current_gas_used = TRIM_BYTES;
     // TODO: Figure out why making a bundle too big fails.
-    let txs_per_block = total_data_size / chunk_size;
+    let txs_per_block = total_data_size / chunk;
+    tracing::debug!("txs per block: {}", txs_per_block);
 
     eyre::ensure!(
         true, //max_txs_per_block >= txs_per_block,

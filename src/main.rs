@@ -19,7 +19,7 @@ struct Opts {
     /// The number of blocks to run the stress test for
     blocks: usize,
 
-    #[arg(default_value = "100", long, short, value_parser = clap::value_parser!(u8).range(1..=100))]
+    #[arg(default_value = "99", long, short, value_parser = clap::value_parser!(u8).range(1..=100))]
     /// What % of the block to fill (0-100).
     fill_pct: u8,
 
