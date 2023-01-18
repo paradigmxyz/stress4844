@@ -39,11 +39,9 @@ struct Opts {
     #[arg(long, short)]
     bundle_signer: String,
 
-    #[arg(default_value = "14567759743", long, short)]
-    gas_price: U256,
-
-    #[arg(default_value = "6000000000", long)]
-    tip_wei: u64,
+    #[arg(default_value = "6000000000", long)] // default "tip" is 6gwei.
+    tip_wei: u64, // have noticed that on goerli, inclusion seems to be pretty
+                  // insensitive to the bribe/tip amount
 }
 
 fn http_provider(s: &str) -> Result<String, String> {

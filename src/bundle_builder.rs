@@ -50,7 +50,6 @@ where
     let gas_per_tx = provider.estimate_gas(&tx.clone().into(), None).await?;
     // tracing::debug!("tx cost {} gas", gas_per_tx);
     // let blob_len = tx.data.as_ref().map(|x| x.len()).unwrap_or_default();
-    // tracing::debug!("created a {blob_len} byte tx from {chunk} size data");
 
     // apply nonce and tx gas limit
     tx.nonce = Some(nonce);
@@ -60,11 +59,9 @@ where
     let tx = tx.into();
     let sender = provider.default_sender().unwrap_or_default();
     let signature = provider.sign_transaction(&tx, sender).await?;
-    // tracing::debug!("sender is {sender} , signature = {signature}");
     let rlp = tx.rlp_signed(&signature);
 
     // println!("{}", serde_json::to_string(&tx)?);
-
     // ad hoc test: submit directly
     // let tx = provider.send_transaction(tx, None).await?.await?;
 
@@ -76,7 +73,7 @@ fn generate_random_data(size: usize) -> Vec<u8> {
     // size is bytes
     let blob = rand::thread_rng()
         .sample_iter(Standard)
-        .take(size) //6 * 1024)
+        .take(size)
         .collect::<Vec<u8>>();
     return blob;
 }
@@ -99,7 +96,9 @@ where
     // the other fields to be serialized.
     let chunk = chunk_size * KB - TRIM_BYTES;
 
-    // For each block, we want `fill_pct` -> we generate N transactions to reach that.
+    // For each block, we want `fill_pct` * 2MB of call data.
+    // we generate FLOOT(2MB / chunk_size) transactions of size "chunk_size"
+    // and then one final "remainder" transaction to reach the desired fill_pct
     let gas_used_per_block = gas_limit * fill_pct / 100;
     let total_data_size: usize = fill_pct as usize * 2 * 1024 * KB / 100; // block max size is 2MB
     tracing::debug!(
@@ -135,7 +134,7 @@ where
         current_data_used += chunk;
     }
 
-    // fill the "remainder" of the block with leftover datasize, since we ha
+    // fill the "remainder" of the block with leftover datasize
     let remaining_data = total_data_size - current_data_used - TRIM_BYTES;
     tracing::debug!("signed {txs_per_block} transactions of {chunk} size each, filling remainder {remaining_data}");
     let last_rlp = get_signed_tx(
@@ -149,6 +148,10 @@ where
     )
     .await?;
     bundle = bundle.push_transaction(last_rlp);
+
+    // couldn't get this way working, so instead we just overpay on gas
+    // in a legacy transaction within the bundle.  the excess gas price is
+    // kept by the proposer as the bribe.
 
     // let payment = TransactionRequest::new()
     //     .to(COINBASE_PAYER_ADDR.parse::<Address>()?)
