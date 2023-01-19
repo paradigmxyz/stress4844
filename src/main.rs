@@ -1,11 +1,14 @@
 // CLI
 use clap::Parser;
 use eyre::Result;
+use serde_json::{json, Value};
 use tracing_subscriber::{filter::EnvFilter, prelude::*};
 
 // Misc
+use chrono::prelude::*;
 use ethers::prelude::*;
 use ethers_flashbots::FlashbotsMiddleware;
+use std::fs::OpenOptions;
 use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
@@ -49,6 +52,33 @@ fn http_provider(s: &str) -> Result<String, String> {
         Ok(s.to_string())
     } else {
         Err(format!("URL does not start with http(s): {s}",))
+    }
+}
+
+fn get_attempt_json(chunk_size: usize, tip_wei: u64, fill_pct: u8, success: bool) -> Value {
+    let entry = json!({
+            "tip_wei": tip_wei,
+            "fill_pct": fill_pct,
+            "success": success,
+            "time": Utc::now().to_string(),
+            "chunk_size": chunk_size,
+    });
+    return entry;
+}
+
+fn log_attempt(chunk_size: usize, tip_wei: u64, fill_pct: u8, success: bool) {
+    let _entry = get_attempt_json(chunk_size, tip_wei, fill_pct, success);
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("stress-4844-attempts.json")
+        .unwrap();
+
+    let res = serde_json::to_writer(file, &_entry);
+
+    match res {
+        Err(e) => eprintln!("Couldn't write to file: {}", e),
+        Ok(_) => return,
     }
 }
 
@@ -163,9 +193,11 @@ async fn main() -> eyre::Result<()> {
                 tracing::info!("bundle #{} included! hash: {:?}", landed, bundle_hash);
 
                 landed += 1; // actually check if we landed it?
+                log_attempt(chunk_size, tip_wei, fill_pct, true);
             }
             Err(err) => {
                 tracing::error!("{}. did not land bundle, retrying.", err);
+                log_attempt(chunk_size, tip_wei, fill_pct, false);
             }
         }
         nonce = provider
