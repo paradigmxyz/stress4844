@@ -9,6 +9,7 @@ use chrono::prelude::*;
 use ethers::prelude::*;
 use ethers_flashbots::FlashbotsMiddleware;
 use std::fs::OpenOptions;
+use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
@@ -55,30 +56,40 @@ fn http_provider(s: &str) -> Result<String, String> {
     }
 }
 
-fn get_attempt_json(chunk_size: usize, tip_wei: u64, fill_pct: u8, success: bool) -> Value {
+fn get_attempt_json(
+    chunk_size: usize,
+    tip_wei: u64,
+    fill_pct: u8,
+    success: bool,
+    block_no: U64,
+) -> Value {
     let entry = json!({
             "tip_wei": tip_wei,
             "fill_pct": fill_pct,
             "success": success,
             "time": Utc::now().to_string(),
             "chunk_size": chunk_size,
+            "block_no": block_no,
     });
     return entry;
 }
 
-fn log_attempt(chunk_size: usize, tip_wei: u64, fill_pct: u8, success: bool) {
-    let _entry = get_attempt_json(chunk_size, tip_wei, fill_pct, success);
-    let file = OpenOptions::new()
+fn log_attempt(chunk_size: usize, tip_wei: u64, fill_pct: u8, success: bool, block_no: U64) {
+    let _entry = get_attempt_json(chunk_size, tip_wei, fill_pct, success, block_no);
+    let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open("stress-4844-attempts.json")
         .unwrap();
 
+    let _res = file.write_all(b"\n");
     let res = serde_json::to_writer(file, &_entry);
 
     match res {
         Err(e) => eprintln!("Couldn't write to file: {}", e),
-        Ok(_) => return,
+        Ok(_) => {
+            return;
+        }
     }
 }
 
@@ -180,11 +191,18 @@ async fn main() -> eyre::Result<()> {
         let span = tracing::trace_span!("submit-bundle", block = block_number.as_u64());
         let _enter = span.enter();
 
+        let future_block_distance = 1; // 1 by default to get next block
+        let target_block = block_number + future_block_distance;
         bundle = bundle
-            .set_block(block_number + 1)
+            .set_block(target_block)
+            //.set_block(block_number + 1)
             .set_simulation_block(block_number)
             .set_simulation_timestamp(0);
-        tracing::debug!("bundle target block {:?}", block_number + 1);
+
+        tracing::debug!(
+            "bundle target block {:?}",
+            target_block //block_number + FUTURE_BLOCK_DISTANCE
+        );
 
         let pending_bundle = provider.inner().send_bundle(&bundle).await?;
         match pending_bundle.await {
@@ -193,11 +211,11 @@ async fn main() -> eyre::Result<()> {
                 tracing::info!("bundle #{} included! hash: {:?}", landed, bundle_hash);
 
                 landed += 1; // actually check if we landed it?
-                log_attempt(chunk_size, tip_wei, fill_pct, true);
+                log_attempt(chunk_size, tip_wei, fill_pct, true, block_number);
             }
             Err(err) => {
                 tracing::error!("{}. did not land bundle, retrying.", err);
-                log_attempt(chunk_size, tip_wei, fill_pct, false);
+                log_attempt(chunk_size, tip_wei, fill_pct, false, block_number);
             }
         }
         nonce = provider
