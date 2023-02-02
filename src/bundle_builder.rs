@@ -34,7 +34,7 @@ fn construct_tx(
     return tx;
 }
 
-async fn get_signed_tx<M: Middleware>(
+pub async fn get_signed_tx<M: Middleware>(
     chain_id: u64,
     address: H160,
     receiver: H160,
