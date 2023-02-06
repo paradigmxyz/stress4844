@@ -71,6 +71,7 @@ fn http_provider(s: &str) -> Result<String, String> {
     }
 }
 
+/// log mev-boost bundle landing attempts, and whether they succeeded or not
 fn get_attempt_json(
     chunk_size: usize,
     tip_wei: u64,
@@ -95,6 +96,39 @@ fn log_attempt(chunk_size: usize, tip_wei: u64, fill_pct: u8, success: bool, blo
         .create(true)
         .append(true)
         .open("stress-4844-attempts.json")
+        .unwrap();
+
+    let _res = file.write_all(b"\n");
+    let res = serde_json::to_writer(file, &_entry);
+
+    match res {
+        Err(e) => eprintln!("Couldn't write to file: {}", e),
+        Ok(_) => {
+            return;
+        }
+    }
+}
+
+/// log individual mempool transactions as they land
+///
+///
+fn get_txn_json(txn: TransactionReceipt) -> Value {
+    let entry = json!({
+            "gas_price": txn.effective_gas_price,
+            "time": Utc::now().to_string(),
+            "block_no": txn.block_number.unwrap(),
+            "status": txn.status.unwrap(),
+            "root": txn.root.unwrap(),
+    });
+    return entry;
+}
+
+fn log_txn(txn: TransactionReceipt) {
+    let _entry = get_txn_json(txn);
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("stress-4844-mempool-txns.json")
         .unwrap();
 
     let _res = file.write_all(b"\n");
@@ -145,7 +179,7 @@ async fn main() -> eyre::Result<()> {
     let provider: Arc<Provider<Http>> =
         Arc::new(Provider::<Http>::try_from(rpc_url)?.interval(interval));
 
-    let chain_id = provider.get_chainid().await?;
+    let chain_id = provider.get_chainid().await?.as_u64();
 
     let address = signer.address();
     let balance = provider.get_balance(address, None).await?;
@@ -170,7 +204,16 @@ async fn main() -> eyre::Result<()> {
 
     if !use_mempool {
         let mempool_txs = opts.mempool_txs;
-        submit_txns(provider, mempool_txs).await?;
+        submit_txns(
+            provider,
+            chain_id,
+            address,
+            receiver,
+            &mut nonce,
+            chunk_size,
+            mempool_txs,
+        )
+        .await?;
     } else {
         let blocks_to_land = opts.blocks;
         let bundle_signer = opts
@@ -182,7 +225,7 @@ async fn main() -> eyre::Result<()> {
 
         submit_bundles(
             provider,
-            chain_id.as_u64(),
+            chain_id,
             address,
             receiver,
             &mut nonce,
@@ -217,6 +260,7 @@ async fn submit_txns(
     let mut transactions: Vec<Bytes> = Vec::new();
 
     for i in 0..mempool_txs - 1 {
+        let new_nonce = *nonce + U256::from(i);
         let tx = bundle_builder::get_signed_tx(
             chain_id,
             address,
@@ -224,13 +268,23 @@ async fn submit_txns(
             chunk_size,
             default_gas_price,
             provider.clone(),
-            *nonce,
+            new_nonce, //*nonce,
         )
         .await?;
         transactions.push(tx);
     }
+
+    let mut responses = Vec::new();
     for txn in transactions {
-        provider.send_raw_transaction(txn);
+        let res = provider.send_raw_transaction(txn);
+        responses.push(res);
+    }
+
+    for res in responses {
+        let txn_receipt = res.await?.await?.unwrap();
+        tracing::info!("{}", txn_receipt.transaction_hash);
+        log_txn(txn_receipt);
+        landed += 1;
     }
 
     Ok(())
