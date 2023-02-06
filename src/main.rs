@@ -276,17 +276,23 @@ async fn submit_txns(
         .await?;
         transactions.push(tx);
     }
+    tracing::info!("generated {mempool_txs} transactions");
 
     let mut responses = Vec::new();
     for txn in transactions {
         let res = provider.send_raw_transaction(txn);
         responses.push(res);
     }
+    tracing::info!("submitted {mempool_txs} transactions");
 
     for res in responses {
         let txn_receipt = res.await?.await?.unwrap();
         landed += 1;
-        tracing::info!("{} {landed}", txn_receipt.transaction_hash);
+        tracing::info!(
+            "{} {landed} on {}",
+            txn_receipt.transaction_hash,
+            txn_receipt.block_number.unwrap()
+        );
         log_txn(txn_receipt);
     }
 
