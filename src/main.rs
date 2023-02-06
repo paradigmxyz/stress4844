@@ -46,7 +46,7 @@ struct Opts {
 
     /// The private key for the full-block template bundle signer wallet.
     /// This is used for reputation within mev-boost.
-    #[arg(long, short)]
+    #[arg(default_value = "", long, short)]
     bundle_signer: String,
 
     /// default "tip" is 5gwei.  have noticed that on goerli, inclusion seems to be pretty
@@ -118,7 +118,6 @@ fn get_txn_json(txn: TransactionReceipt) -> Value {
             "time": Utc::now().to_string(),
             "block_no": txn.block_number.unwrap(),
             "status": txn.status.unwrap(),
-            "root": txn.root.unwrap(),
     });
     return entry;
 }
@@ -202,8 +201,10 @@ async fn main() -> eyre::Result<()> {
         .await?
         .expect("could not get latest block");
 
-    if !use_mempool {
+    if use_mempool {
         let mempool_txs = opts.mempool_txs;
+        // Sign transactions with a private key
+        let provider = SignerMiddleware::new(provider, signer);
         submit_txns(
             provider,
             chain_id,
@@ -244,7 +245,7 @@ async fn main() -> eyre::Result<()> {
 
 /// go through the mempool, for transactions with <= 128kb of calldata each
 async fn submit_txns(
-    provider: Arc<Provider<Http>>,
+    provider: SignerMiddleware<Arc<Provider<Http>>, Wallet<SigningKey>>,
     chain_id: u64,
     address: H160,
     receiver: H160,
@@ -282,9 +283,9 @@ async fn submit_txns(
 
     for res in responses {
         let txn_receipt = res.await?.await?.unwrap();
-        tracing::info!("{}", txn_receipt.transaction_hash);
-        log_txn(txn_receipt);
         landed += 1;
+        tracing::info!("{} {landed}", txn_receipt.transaction_hash);
+        log_txn(txn_receipt);
     }
 
     Ok(())
