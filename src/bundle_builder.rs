@@ -78,6 +78,11 @@ fn generate_random_data(size: usize) -> Vec<u8> {
     return blob;
 }
 
+pub fn calldata_kb_to_bytes(chunk_size: usize) -> usize {
+    let calldate_bytes = chunk_size * KB - TRIM_BYTES;
+    calldate_bytes
+}
+
 pub async fn construct_bundle<M: Middleware>(
     chain_id: u64,
     address: H160,
@@ -94,7 +99,7 @@ where
 {
     // `CHUNKS_SIZE` Kilobytes per transaction, shave off 300 bytes to leave room for
     // the other fields to be serialized.
-    let chunk = chunk_size * KB - TRIM_BYTES;
+    let chunk = calldata_kb_to_bytes(chunk_size);
 
     // For each block, we want `fill_pct` * 2MB of call data.
     // we generate FLOOT(2MB / chunk_size) transactions of size "chunk_size"

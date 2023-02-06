@@ -255,6 +255,8 @@ async fn submit_txns(
     mempool_txs: usize,
 ) -> eyre::Result<()> {
     let mut landed = 0;
+    let calldata_bytes = bundle_builder::calldata_kb_to_bytes(chunk_size);
+
     let default_gas_price = provider.get_gas_price().await?;
     tracing::info!("mempool_txs = {mempool_txs}");
 
@@ -266,7 +268,7 @@ async fn submit_txns(
             chain_id,
             address,
             receiver,
-            chunk_size,
+            calldata_bytes,
             default_gas_price,
             provider.clone(),
             new_nonce, //*nonce,
