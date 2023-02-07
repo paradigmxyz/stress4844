@@ -290,15 +290,16 @@ async fn submit_txns(
 
     for receipt in receipts {
         thread::sleep(time::Duration::from_millis(1000));
-        // this should be super rare - somehow get dropped from mempool if gas too low
-        let receipt = receipt.expect("transaction shouldnt be dropped from mempool");
-        landed += 1;
-        tracing::info!(
-            "{} {landed} on {}",
-            receipt.transaction_hash,
-            receipt.block_number.unwrap()
-        );
-        log_txn(receipt);
+        if let Some(receipt) = receipt {
+            // not hitting this should be rare - somehow get dropped from mempool if gas too low
+            landed += 1;
+            tracing::info!(
+                "{} {landed} on {}",
+                receipt.transaction_hash,
+                receipt.block_number.unwrap()
+            );
+            log_txn(receipt);
+        }
     }
 
     Ok(())
