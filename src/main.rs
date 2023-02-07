@@ -193,7 +193,7 @@ async fn main() -> eyre::Result<()> {
         .await?;
     tracing::debug!("current nonce: {nonce}, use_mempool = {use_mempool}");
     // TODO: Do we want this to be different per transaction?
-    let receiver: Address = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse()?;
+    let receiver: Address = "0x4844AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse()?;
 
     let block = provider
         .get_block(BlockNumber::Latest)
@@ -289,7 +289,7 @@ async fn submit_txns(
     tracing::debug!("submitted {mempool_txs} transactions");
 
     for receipt in receipts {
-        thread::sleep(time::Duration::from_millis(1000));
+        thread::sleep(time::Duration::from_millis(20));
         if let Some(receipt) = receipt {
             // not hitting this should be rare - somehow get dropped from mempool if gas too low
             landed += 1;
@@ -299,6 +299,8 @@ async fn submit_txns(
                 receipt.block_number.unwrap()
             );
             log_txn(receipt);
+        } else {
+            tracing::debug!("no receipt!");
         }
     }
 
