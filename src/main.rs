@@ -172,8 +172,6 @@ async fn main() -> eyre::Result<()> {
         .with(EnvFilter::new("stress4844=trace"))
         .init();
 
-    tracing::info!("use_mempool = {use_mempool}");
-
     // the "usual" rpc provider, no flashbots mev-boost middleware
     let provider: Arc<Provider<Http>> =
         Arc::new(Provider::<Http>::try_from(rpc_url)?.interval(interval));
@@ -192,7 +190,7 @@ async fn main() -> eyre::Result<()> {
     let mut nonce = provider
         .get_transaction_count(address, Some(BlockNumber::Pending.into()))
         .await?;
-    tracing::debug!("current nonce: {}", nonce);
+    tracing::debug!("current nonce: {nonce}, use_mompool = {use_mempool}");
     // TODO: Do we want this to be different per transaction?
     let receiver: Address = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse()?;
 
@@ -258,7 +256,6 @@ async fn submit_txns(
     let calldata_bytes = bundle_builder::calldata_kb_to_bytes(chunk_size);
 
     let default_gas_price = provider.get_gas_price().await?;
-    tracing::info!("mempool_txs = {mempool_txs}");
 
     let mut transactions: Vec<Bytes> = Vec::new();
 
@@ -276,14 +273,14 @@ async fn submit_txns(
         .await?;
         transactions.push(tx);
     }
-    tracing::info!("generated {mempool_txs} transactions");
+    tracing::debug!("generated {mempool_txs} transactions");
 
     let mut responses = Vec::new();
     for txn in transactions {
         let res = provider.send_raw_transaction(txn);
         responses.push(res);
     }
-    tracing::info!("submitted {mempool_txs} transactions");
+    tracing::debug!("submitted {mempool_txs} transactions");
 
     for res in responses {
         let txn_receipt = res.await?.await?.unwrap();
