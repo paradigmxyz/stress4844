@@ -3,6 +3,7 @@ use clap::Parser;
 use ethers::prelude::k256::ecdsa::SigningKey;
 use eyre::Result;
 use serde_json::{json, Value};
+use std::{thread, time};
 use tracing_subscriber::{filter::EnvFilter, prelude::*};
 
 // Misc
@@ -190,7 +191,7 @@ async fn main() -> eyre::Result<()> {
     let mut nonce = provider
         .get_transaction_count(address, Some(BlockNumber::Pending.into()))
         .await?;
-    tracing::debug!("current nonce: {nonce}, use_mompool = {use_mempool}");
+    tracing::debug!("current nonce: {nonce}, use_mempool = {use_mempool}");
     // TODO: Do we want this to be different per transaction?
     let receiver: Address = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse()?;
 
@@ -278,19 +279,26 @@ async fn submit_txns(
     let mut responses = Vec::new();
     for txn in transactions {
         let res = provider.send_raw_transaction(txn);
+
         responses.push(res);
     }
+    let pending_txs = futures::future::try_join_all(responses).await?;
+    let receipts: Vec<Option<TransactionReceipt>> =
+        futures::future::try_join_all(pending_txs).await?;
+
     tracing::debug!("submitted {mempool_txs} transactions");
 
-    for res in responses {
-        let txn_receipt = res.await?.await?.unwrap();
+    for receipt in receipts {
+        thread::sleep(time::Duration::from_millis(1000));
+        // this should be super rare - somehow get dropped from mempool if gas too low
+        let receipt = receipt.expect("transaction shouldnt be dropped from mempool");
         landed += 1;
         tracing::info!(
             "{} {landed} on {}",
-            txn_receipt.transaction_hash,
-            txn_receipt.block_number.unwrap()
+            receipt.transaction_hash,
+            receipt.block_number.unwrap()
         );
-        log_txn(txn_receipt);
+        log_txn(receipt);
     }
 
     Ok(())
