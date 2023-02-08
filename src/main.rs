@@ -1,7 +1,9 @@
 // CLI
 use clap::Parser;
+use ethers::prelude::k256::ecdsa::SigningKey;
 use eyre::Result;
 use serde_json::{json, Value};
+use std::{thread, time};
 use tracing_subscriber::{filter::EnvFilter, prelude::*};
 
 // Misc
@@ -17,16 +19,20 @@ use url::Url;
 // local utils
 mod bundle_builder;
 
+/// command line arguments for running the script
 #[derive(Debug, Parser)]
 struct Opts {
-    #[arg(default_value = "1", long)]
     /// The number of blocks to run the stress test for
+    #[arg(default_value = "1", long)]
     blocks: usize,
 
-    #[arg(default_value = "99", long, short, value_parser = clap::value_parser!(u8).range(1..=100))]
     /// What % of the block to fill (0-100).
+    #[arg(default_value = "80", long, short, value_parser = clap::value_parser!(u8).range(1..=100))]
     fill_pct: u8,
 
+    /// How much calldata (in kbytes) to send in each individual transaction.
+    /// Note that mempool is limited to 128 in geth, and higher values required
+    /// special white listing from flashbots relay on goerli.
     #[arg(default_value = "128", long, short)]
     chunk_size: usize,
 
@@ -40,12 +46,22 @@ struct Opts {
     tx_signer: String,
 
     /// The private key for the full-block template bundle signer wallet.
-    #[arg(long, short)]
+    /// This is used for reputation within mev-boost.
+    #[arg(default_value = "", long, short)]
     bundle_signer: String,
 
-    #[arg(default_value = "6000000000", long)] // default "tip" is 6gwei.
-    tip_wei: u64, // have noticed that on goerli, inclusion seems to be pretty
-                  // insensitive to the bribe/tip amount
+    /// default "tip" is 5gwei.  have noticed that on goerli, inclusion seems to be pretty
+    /// insensitive to the bribe/tip amount.  
+    #[arg(default_value = "5000000000", long)]
+    tip_wei: u64,
+
+    /// do we use mev-boost, or submit via the mempool?
+    #[arg(default_value = "false", long, num_args = 0)]
+    mem_pool: bool,
+
+    /// if using mempool, how many transactions to submit in parallel?  (with appropriate nonce increment)
+    #[arg(default_value = "64", long)]
+    mempool_txs: usize,
 }
 
 fn http_provider(s: &str) -> Result<String, String> {
@@ -56,6 +72,7 @@ fn http_provider(s: &str) -> Result<String, String> {
     }
 }
 
+/// log mev-boost bundle landing attempts, and whether they succeeded or not
 fn get_attempt_json(
     chunk_size: usize,
     tip_wei: u64,
@@ -93,6 +110,38 @@ fn log_attempt(chunk_size: usize, tip_wei: u64, fill_pct: u8, success: bool, blo
     }
 }
 
+/// log individual mempool transactions as they land
+///
+///
+fn get_txn_json(txn: TransactionReceipt) -> Value {
+    let entry = json!({
+            "gas_price": txn.effective_gas_price,
+            "time": Utc::now().to_string(),
+            "block_no": txn.block_number.unwrap(),
+            "status": txn.status.unwrap(),
+    });
+    return entry;
+}
+
+fn log_txn(txn: TransactionReceipt) {
+    let _entry = get_txn_json(txn);
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("stress-4844-mempool-txns.json")
+        .unwrap();
+
+    let _res = file.write_all(b"\n");
+    let res = serde_json::to_writer(file, &_entry);
+
+    match res {
+        Err(e) => eprintln!("Couldn't write to file: {}", e),
+        Ok(_) => {
+            return;
+        }
+    }
+}
+
 /// Address of the following contract to allow for easy coinbase payments on Goerli.
 ///
 /// contract CoinbasePayer {
@@ -105,38 +154,30 @@ fn log_attempt(chunk_size: usize, tip_wei: u64, fill_pct: u8, success: bool, blo
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let opts = Opts::parse();
-    let interval = Duration::from_secs(1);
-    let rpc_url = opts.rpc_url;
-    let tx_signer = opts.tx_signer.strip_prefix("0x").unwrap_or(&opts.tx_signer);
-    let bundle_signer = opts
-        .bundle_signer
-        .strip_prefix("0x")
-        .unwrap_or(&opts.bundle_signer);
-    let mut landed = 0;
-    let blocks_to_land = opts.blocks;
-    let fill_pct = opts.fill_pct; // how much of the full 2MB payload to take up with calldata
-    let tip_wei = opts.tip_wei; // how much to overpay on gas, in percentage points
 
+    let rpc_url = opts.rpc_url;
+
+    let use_mempool = opts.mem_pool;
+
+    let tx_signer = opts.tx_signer.strip_prefix("0x").unwrap_or(&opts.tx_signer);
+    let signer = tx_signer.parse::<LocalWallet>()?;
+
+    let fill_pct = opts.fill_pct; // how much of the full 2MB payload to take up with calldata
+    let tip_wei = opts.tip_wei; // how much to overpay on gas, in wei.
     let chunk_size = opts.chunk_size;
-    //let chunk_size = ethers::prelude::U256::from(opts.chunk_size); // for example, 384, 512, etc.
+
+    let interval = Duration::from_secs(1);
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(EnvFilter::new("stress4844=trace"))
         .init();
 
-    let bundle_signer = bundle_signer.parse::<LocalWallet>()?;
-
+    // the "usual" rpc provider, no flashbots mev-boost middleware
     let provider: Arc<Provider<Http>> =
         Arc::new(Provider::<Http>::try_from(rpc_url)?.interval(interval));
 
-    let signer = tx_signer.parse::<LocalWallet>()?;
-
-    let bundle_middleware = FlashbotsMiddleware::new(
-        provider.clone(),
-        Url::parse("https://relay-goerli.flashbots.net/")?, // TODO: make configurable
-        bundle_signer,
-    );
+    let chain_id = provider.get_chainid().await?.as_u64();
 
     let address = signer.address();
     let balance = provider.get_balance(address, None).await?;
@@ -146,21 +187,153 @@ async fn main() -> eyre::Result<()> {
         address,
         ethers::core::utils::format_units(balance, "eth")?,
     );
-    let provider =
-        Arc::new(SignerMiddleware::new_with_provider_chain(bundle_middleware, signer).await?);
-    let chain_id = provider.signer().chain_id();
 
     let mut nonce = provider
         .get_transaction_count(address, Some(BlockNumber::Pending.into()))
         .await?;
-    tracing::debug!("current nonce: {}", nonce);
+    tracing::debug!("current nonce: {nonce}, use_mempool = {use_mempool}");
     // TODO: Do we want this to be different per transaction?
-    let receiver: Address = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse()?;
+    let receiver: Address = "0x4844AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse()?;
 
     let block = provider
         .get_block(BlockNumber::Latest)
         .await?
         .expect("could not get latest block");
+
+    if use_mempool {
+        let mempool_txs = opts.mempool_txs;
+        // Sign transactions with a private key
+        let provider = SignerMiddleware::new(provider, signer);
+        submit_txns(
+            provider,
+            chain_id,
+            address,
+            receiver,
+            &mut nonce,
+            chunk_size,
+            mempool_txs,
+        )
+        .await?;
+    } else {
+        let blocks_to_land = opts.blocks;
+        let bundle_signer = opts
+            .bundle_signer
+            .strip_prefix("0x")
+            .unwrap_or(&opts.bundle_signer);
+
+        let bundle_signer = bundle_signer.parse::<LocalWallet>()?;
+
+        submit_bundles(
+            provider,
+            chain_id,
+            address,
+            receiver,
+            &mut nonce,
+            block,
+            blocks_to_land,
+            chunk_size,
+            fill_pct,
+            tip_wei,
+            tx_signer,
+            bundle_signer,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// go through the mempool, for transactions with <= 128kb of calldata each
+async fn submit_txns(
+    provider: SignerMiddleware<Arc<Provider<Http>>, Wallet<SigningKey>>,
+    chain_id: u64,
+    address: H160,
+    receiver: H160,
+    nonce: &mut U256,
+    chunk_size: usize,
+
+    mempool_txs: usize,
+) -> eyre::Result<()> {
+    let mut landed = 0;
+    let calldata_bytes = bundle_builder::calldata_kb_to_bytes(chunk_size);
+
+    let default_gas_price = provider.get_gas_price().await?;
+
+    let mut transactions: Vec<Bytes> = Vec::new();
+
+    for i in 0..mempool_txs - 1 {
+        let new_nonce = *nonce + U256::from(i);
+        let tx = bundle_builder::get_signed_tx(
+            chain_id,
+            address,
+            receiver,
+            calldata_bytes,
+            default_gas_price,
+            provider.clone(),
+            new_nonce, //*nonce,
+        )
+        .await?;
+        transactions.push(tx);
+    }
+    tracing::debug!("generated {mempool_txs} transactions");
+
+    let mut responses = Vec::new();
+    for txn in transactions {
+        let res = provider.send_raw_transaction(txn);
+
+        responses.push(res);
+    }
+    let pending_txs = futures::future::try_join_all(responses).await?;
+    let receipts: Vec<Option<TransactionReceipt>> =
+        futures::future::try_join_all(pending_txs).await?;
+
+    tracing::debug!("submitted {mempool_txs} transactions");
+
+    for receipt in receipts {
+        thread::sleep(time::Duration::from_millis(20));
+        if let Some(receipt) = receipt {
+            // not hitting this should be rare - somehow get dropped from mempool if gas too low
+            landed += 1;
+            tracing::info!(
+                "{} {landed} on {}",
+                receipt.transaction_hash,
+                receipt.block_number.unwrap()
+            );
+            log_txn(receipt);
+        } else {
+            tracing::debug!("no receipt!");
+        }
+    }
+
+    Ok(())
+}
+
+/// go through mev-boost via flashbots relay, potentially for larger calldata txns
+async fn submit_bundles(
+    provider: Arc<Provider<Http>>,
+    chain_id: u64,
+    address: H160,
+    receiver: H160,
+    nonce: &mut U256,
+    block: Block<H256>,
+    blocks_to_land: usize,
+    chunk_size: usize,
+    fill_pct: u8,
+    tip_wei: u64,
+    tx_signer: &str,
+    bundle_signer: Wallet<SigningKey>,
+) -> eyre::Result<()> {
+    let mut landed = 0;
+
+    let signer = tx_signer.parse::<LocalWallet>()?;
+
+    let bundle_middleware = FlashbotsMiddleware::new(
+        provider.clone(),
+        Url::parse("https://relay-goerli.flashbots.net/")?, // TODO: make configurable
+        bundle_signer,
+    );
+
+    let provider =
+        Arc::new(SignerMiddleware::new_with_provider_chain(bundle_middleware, signer).await?);
 
     let mut bundle = bundle_builder::construct_bundle(
         chain_id,
@@ -169,7 +342,7 @@ async fn main() -> eyre::Result<()> {
         provider.clone(),
         block.gas_limit,
         fill_pct,
-        nonce,
+        *nonce,
         chunk_size,
         tip_wei,
     )
@@ -218,9 +391,10 @@ async fn main() -> eyre::Result<()> {
                 log_attempt(chunk_size, tip_wei, fill_pct, false, block_number);
             }
         }
-        nonce = provider
+        *nonce = provider
             .get_transaction_count(address, Some(BlockNumber::Pending.into()))
             .await?; // TODO: keep track of nonce ourselves?
+
         tracing::debug!("signing new bundle for next block (new nonce: {})", nonce);
         bundle = bundle_builder::construct_bundle(
             chain_id,
@@ -229,7 +403,7 @@ async fn main() -> eyre::Result<()> {
             provider.clone(),
             block.gas_limit,
             fill_pct,
-            nonce,
+            *nonce,
             chunk_size,
             tip_wei,
         )
